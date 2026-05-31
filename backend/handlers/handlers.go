@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -177,7 +178,102 @@ func (h *Handler) GenerateSite(c *gin.Context) {
 	})
 }
 
-// DeployToKangle 部署到 Kangle
+// GenerateSiteStream 流式生成网站（SSE）
+func (h *Handler) GenerateSiteStream(c *gin.Context) {
+	var req models.GenerateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.SiteType == "" {
+		req.SiteType = "通用网站"
+	}
+
+	generator := h.aiGenerator
+	if generator == nil {
+		generator = ai.NewAIGenerator(
+			os.Getenv("AI_API_HOST"),
+			os.Getenv("AI_API_KEY"),
+		)
+	}
+
+	// SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "不支持流式传输"})
+		return
+	}
+
+	// 流式调用 AI
+	chunks := make(chan ai.StreamChunk, 100)
+	done := make(chan *ai.GenerateResponse, 1)
+	errCh := make(chan error, 1)
+
+	go func() {
+		result, err := generator.GenerateStream(ai.GenerateRequest{
+			Prompt:     req.Prompt,
+			SiteType:   req.SiteType,
+			ThemeColor: req.ThemeColor,
+		}, chunks)
+		if err != nil {
+			errCh <- err
+		} else {
+			done <- result
+		}
+	}()
+
+	ctx := c.Request.Context()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case err := <-errCh:
+			fmt.Fprintf(c.Writer, "data: {\"type\":\"error\",\"message\":\"%s\"}\n\n", err.Error())
+			flusher.Flush()
+			return
+
+		case chunk, ok := <-chunks:
+			if !ok {
+				// chunks 关闭，等待 done
+				chunks = nil
+				continue
+			}
+			data, _ := json.Marshal(map[string]interface{}{
+				"type":    "chunk",
+				"content": chunk.Content,
+			})
+			fmt.Fprintf(c.Writer, "data: %s\n\n", string(data))
+			flusher.Flush()
+
+		case result := <-done:
+			data, _ := json.Marshal(map[string]interface{}{
+				"type":      "done",
+				"html_code": result.HTMLCode,
+				"css_code":  result.CSSCode,
+			})
+			fmt.Fprintf(c.Writer, "data: %s\n\n", string(data))
+			flusher.Flush()
+
+			// 发送代码块事件
+			codeData, _ := json.Marshal(map[string]interface{}{
+				"type":      "code",
+				"html_code": result.HTMLCode,
+				"css_code":  result.CSSCode,
+			})
+			fmt.Fprintf(c.Writer, "data: %s\n\n", string(codeData))
+			flusher.Flush()
+			return
+		}
+	}
+}
 func (h *Handler) DeployToKangle(c *gin.Context) {
 	id := c.Param("id")
 

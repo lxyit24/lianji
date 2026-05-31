@@ -61,6 +61,7 @@ func main() {
 
 		// AI 生成
 		api.POST("/generate", h.GenerateSite)
+		api.POST("/generate/stream", h.GenerateSiteStream)
 
 		// 部署到 Kangle
 		api.POST("/deploy/:id", h.DeployToKangle)

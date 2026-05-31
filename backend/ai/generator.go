@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -50,6 +51,11 @@ type GenerateResponse struct {
 type PHPFile struct {
 	Path    string `json:"path"`    // 文件路径
 	Content string `json:"content"` // 文件内容
+}
+
+// StreamChunk 流式输出块
+type StreamChunk struct {
+	Content string `json:"content"`
 }
 
 // Generate 使用 AI 生成网站代码
@@ -207,4 +213,192 @@ func (g *AIGenerator) fixJSON(content string) string {
 	}
 	
 	return content[start : end+1]
+}
+
+// GenerateStream 流式生成网站代码
+func (g *AIGenerator) GenerateStream(req GenerateRequest, chunks chan<- StreamChunk) (*GenerateResponse, error) {
+	defer close(chunks)
+
+	systemPrompt := `你是一个专业的网站开发工程师。请根据用户描述生成完整的网站代码。
+
+要求：
+- 使用纯 HTML + CSS + JavaScript（无需后端框架）
+- 响应式设计，现代化 UI
+- 代码完整可运行
+
+先简要说明你的设计方案（1-2句），然后用如下格式输出代码：
+
+###HTML###
+<!DOCTYPE html>...完整HTML代码...
+###HTML_END###
+
+###CSS###
+body { ... }...完整CSS代码...
+###CSS_END###
+
+确保 HTML 和 CSS 标记之间只包含纯代码，不要有额外说明。`
+
+	userPrompt := "请为以下需求生成网站代码：" + req.Prompt
+
+	if req.ThemeColor != "" {
+		userPrompt += "\n\n主题色偏好：" + req.ThemeColor
+	}
+
+	requestBody := map[string]interface{}{
+		"model":       "MiniMax-M2.7-highspeed",
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
+		},
+		"temperature": 0.7,
+		"max_tokens":  8192,
+		"stream":      true,
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("构建请求失败: %v", err)
+	}
+
+	url := g.apiHost + "/v1/chat/completions"
+	if !strings.Contains(g.apiHost, "/v1") {
+		url = g.apiHost + "/v1/chat/completions"
+	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %v", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := g.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("AI 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("AI 返回错误: %s - %s", resp.Status, string(body))
+	}
+
+	// 读取 SSE 流
+	var fullContent strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var streamResp map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
+			continue
+		}
+
+		choices, ok := streamResp["choices"].([]interface{})
+		if !ok || len(choices) == 0 {
+			continue
+		}
+
+		choice, ok := choices[0].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		delta, ok := choice["delta"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		content, ok := delta["content"].(string)
+		if !ok || content == "" {
+			continue
+		}
+
+		fullContent.WriteString(content)
+		chunks <- StreamChunk{Content: content}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("读取流失败: %v", err)
+	}
+
+	// 解析最终结果
+	return g.parseStreamContent(fullContent.String())
+}
+
+// parseStreamContent 从流式输出中提取 HTML 和 CSS
+func (g *AIGenerator) parseStreamContent(content string) (*GenerateResponse, error) {
+	result := &GenerateResponse{}
+
+	// 提取 HTML
+	htmlStart := strings.Index(content, "###HTML###")
+	htmlEnd := strings.Index(content, "###HTML_END###")
+	if htmlStart != -1 && htmlEnd != -1 {
+		result.HTMLCode = strings.TrimSpace(content[htmlStart+10 : htmlEnd])
+		// 去掉可能的 markdown 代码块标记
+		result.HTMLCode = strings.TrimPrefix(result.HTMLCode, "```html")
+		result.HTMLCode = strings.TrimPrefix(result.HTMLCode, "```")
+		result.HTMLCode = strings.TrimSuffix(result.HTMLCode, "```")
+		result.HTMLCode = strings.TrimSpace(result.HTMLCode)
+	} else {
+		// 尝试直接从内容中提取
+		result.HTMLCode = extractCodeBlock(content, "html")
+	}
+
+	// 提取 CSS
+	cssStart := strings.Index(content, "###CSS###")
+	cssEnd := strings.Index(content, "###CSS_END###")
+	if cssStart != -1 && cssEnd != -1 {
+		result.CSSCode = strings.TrimSpace(content[cssStart+9 : cssEnd])
+		result.CSSCode = strings.TrimPrefix(result.CSSCode, "```css")
+		result.CSSCode = strings.TrimPrefix(result.CSSCode, "```")
+		result.CSSCode = strings.TrimSuffix(result.CSSCode, "```")
+		result.CSSCode = strings.TrimSpace(result.CSSCode)
+	} else {
+		result.CSSCode = extractCodeBlock(content, "css")
+	}
+
+	if result.HTMLCode == "" {
+		return nil, fmt.Errorf("未能从 AI 响应中提取 HTML 代码")
+	}
+
+	return result, nil
+}
+
+// extractCodeBlock 提取代码块
+func extractCodeBlock(content, lang string) string {
+	startMarker := "```" + lang
+	start := strings.Index(content, startMarker)
+	if start == -1 {
+		startMarker = "```"
+		start = strings.Index(content, startMarker)
+	}
+	if start == -1 {
+		return ""
+	}
+
+	start += len(startMarker)
+	// 跳过第一行（可能是语言标识符后的换行）
+	if idx := strings.Index(content[start:], "\n"); idx != -1 {
+		start += idx + 1
+	}
+
+	end := strings.Index(content[start:], "```")
+	if end == -1 {
+		return strings.TrimSpace(content[start:])
+	}
+
+	return strings.TrimSpace(content[start : start+end])
 }
