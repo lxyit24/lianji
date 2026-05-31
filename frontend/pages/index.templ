@@ -1,0 +1,171 @@
+package pages
+
+templ Index() {
+	<!DOCTYPE html>
+	<html lang="zh-CN">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>Lianji - AI 建站系统</title>
+			<script src="https://unpkg.com/htmx.org"></script>
+			<style>
+				* {
+					margin: 0;
+					padding: 0;
+					box-sizing: border-box;
+				}
+				body {
+					font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+					background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+					min-height: 100vh;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+				}
+				.container {
+					background: white;
+					border-radius: 12px;
+					box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+					padding: 40px;
+					max-width: 600px;
+					width: 90%;
+				}
+				h1 {
+					color: #333;
+					margin-bottom: 10px;
+					font-size: 32px;
+				}
+				.subtitle {
+					color: #666;
+					margin-bottom: 30px;
+					font-size: 16px;
+				}
+				.form-group {
+					margin-bottom: 20px;
+				}
+				label {
+					display: block;
+					margin-bottom: 8px;
+					color: #333;
+					font-weight: 500;
+				}
+				textarea {
+					width: 100%;
+					padding: 12px;
+					border: 2px solid #e0e0e0;
+					border-radius: 6px;
+					font-size: 14px;
+					font-family: inherit;
+					resize: vertical;
+					min-height: 120px;
+					transition: border-color 0.3s;
+				}
+				textarea:focus {
+					outline: none;
+					border-color: #667eea;
+				}
+				.button-group {
+					display: flex;
+					gap: 10px;
+					margin-top: 30px;
+				}
+				button {
+					flex: 1;
+					padding: 12px 24px;
+					border: none;
+					border-radius: 6px;
+					font-size: 16px;
+					font-weight: 600;
+					cursor: pointer;
+					transition: all 0.3s;
+				}
+				.btn-primary {
+					background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+					color: white;
+				}
+				.btn-primary:hover {
+					transform: translateY(-2px);
+					box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+				}
+				.btn-primary:disabled {
+					opacity: 0.6;
+					cursor: not-allowed;
+					transform: none;
+				}
+				.status {
+					margin-top: 20px;
+					padding: 15px;
+					border-radius: 6px;
+					display: none;
+				}
+				.status.show {
+					display: block;
+				}
+				.status.success {
+					background: #d4edda;
+					color: #155724;
+					border: 1px solid #c3e6cb;
+				}
+				.status.error {
+					background: #f8d7da;
+					color: #721c24;
+					border: 1px solid #f5c6cb;
+				}
+				.status.loading {
+					background: #d1ecf1;
+					color: #0c5460;
+					border: 1px solid #bee5eb;
+				}
+				.htmx-request .htmx-indicator {
+					display: inline-block;
+				}
+				.htmx-indicator {
+					display: none;
+				}
+				.spinner {
+					display: inline-block;
+					width: 16px;
+					height: 16px;
+					border: 2px solid rgba(0, 0, 0, 0.1);
+					border-radius: 50%;
+					border-top-color: #667eea;
+					animation: spin 0.8s linear infinite;
+				}
+				@keyframes spin {
+					to { transform: rotate(360deg); }
+				}
+			</style>
+		</head>
+		<body>
+			<div class="container">
+				<h1>🚀 Lianji</h1>
+				<p class="subtitle">AI 驱动的网站生成器</p>
+				
+				<form hx-post="/api/v1/generate" hx-target="#result" hx-swap="innerHTML">
+					<div class="form-group">
+						<label for="description">描述你想要的网站</label>
+						<textarea 
+							id="description" 
+							name="description" 
+							placeholder="例如：一个展示我的摄影作品的个人网站，包含作品集、关于我和联系方式..."
+							required></textarea>
+					</div>
+					
+					<div class="button-group">
+						<button type="submit" class="btn-primary">
+							<span class="htmx-indicator">
+								<span class="spinner"></span>
+								生成中...
+							</span>
+							<span class="htmx-request" style="display:none;">生成中...</span>
+							<span class="htmx-request" style="display:none;">✨ 生成网站</span>
+							生成网站
+						</button>
+					</div>
+				</form>
+				
+				<div id="result" class="status"></div>
+			</div>
+		</body>
+	</html>
+}
